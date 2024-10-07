@@ -259,7 +259,8 @@ pub(crate) fn compile_recursive_ref<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::tests_util;
+    use crate::{tests_util, ValidationOptions, Validator};
+    use referencing::{Draft, Retrieve, Uri};
     use serde_json::{json, Value};
     use test_case::test_case;
 
@@ -343,6 +344,112 @@ mod tests {
         let validator = crate::validator_for(&schema).expect("Invalid schema");
         assert!(validator.is_valid(&json!(2)));
         assert!(!validator.is_valid(&json!("a")));
+    }
+
+    #[test]
+    fn test_relative_base_uri_in_referenced_schema_doc_without_defs() {
+        let schema = json!({
+            "$id": "https://example.com/root",
+            "properties": {
+                "location": {
+                    "$ref": "/indirection#/baz",
+                }
+            }
+        });
+
+        struct MyRetrieve {}
+        impl Retrieve for MyRetrieve {
+            fn retrieve(
+                &self,
+                uri: &Uri<&str>,
+            ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+                println!("Retrieving {}", uri);
+                match uri.path().to_string().as_ref() {
+                    "/indirection" => Ok(json!({
+                        "$id": "/indirection",
+                        "baz": {
+                            "$id": "#/baz",
+                            "$ref": "/types#/foo"
+                        }
+                    })),
+                    "/types" => Ok(json!({
+                        "$id": "/types",
+                        "foo": {
+                            "$id": "#/foo",
+                            "$ref": "#/bar"
+                        },
+                        "bar": {
+                            "$id": "#/bar",
+                            "type": "integer"
+                        },
+                    })),
+                    _ => panic!("Not found"),
+                }
+            }
+        }
+
+        let validator = Validator::options()
+            .with_draft(Draft::Draft201909)
+            .with_retriever(MyRetrieve {})
+            .build(&schema)
+            .expect("Invalid schema");
+
+        assert!(validator.is_valid(&json!(2)));
+    }
+
+    #[test]
+    fn test_relative_base_uri_in_referenced_schema_doc_with_defs() {
+        let schema = json!({
+            "$id": "https://example.com/root",
+            "properties": {
+                "location": {
+                    "$ref": "/indirection#/$defs/baz",
+                }
+            }
+        });
+
+        struct MyRetrieve {}
+        impl Retrieve for MyRetrieve {
+            fn retrieve(
+                &self,
+                uri: &Uri<&str>,
+            ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+                println!("Retrieving {}", uri);
+                match uri.path().to_string().as_ref() {
+                    "/indirection" => Ok(json!({
+                        "$id": "/indirection",
+                        "$defs": {
+                            "baz": {
+                                "$id": "#/$defs/baz",
+                                "$ref": "/types#/$defs/foo"
+                            }
+                        }
+                    })),
+                    "/types" => Ok(json!({
+                        "$id": "/types",
+                        "$defs": {
+                            "foo": {
+                                "$id": "#/$defs/foo",
+                                "$ref": "#/$defs/bar"
+                            },
+                            "bar": {
+                                "$id": "#/$defs/bar",
+                                "type": "integer"
+                            }
+                        }
+                    })),
+                    _ => panic!("Not found"),
+                }
+            }
+        }
+
+        let validator = Validator::options()
+            .with_draft(Draft::Draft201909)
+            .with_retriever(MyRetrieve {})
+            .build(&schema)
+            .expect("Invalid schema");
+
+        assert!(validator.is_valid(&json!(2)));
     }
 
     #[test_case(
